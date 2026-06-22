@@ -19,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--type", dest="notice_type", type=int, default=5, help="Notice type. False information is type=5.")
     parser.add_argument("--login", action="store_true", help="Pause after opening browser so you can log in manually.")
     parser.add_argument("--headless", action="store_true", help="Run browser without UI. Use only after login cookies are saved.")
+    parser.add_argument("--human-mode", action="store_true", help="Use visible Edge and slower delays to make manual intervention easier.")
     parser.add_argument("--browser-channel", default="msedge", help="Playwright browser channel. Use msedge for Microsoft Edge.")
     parser.add_argument("--keep-html", action="store_true", help="Save crawled HTML pages under data/html_debug.")
     parser.add_argument("--browser-profile", default="data/browser_profile", help="Playwright persistent browser profile path.")
@@ -117,6 +118,15 @@ def _filter_available_notices(
 
 def main() -> None:
     args = parse_args()
+    if args.human_mode:
+        args.headless = False
+        args.notice_page_sleep_ms = max(args.notice_page_sleep_ms, 8000)
+        args.notice_detail_sleep_ms = max(args.notice_detail_sleep_ms, 6000)
+        args.status_sleep_ms = max(args.status_sleep_ms, 6000)
+        args.profile_sleep_ms = max(args.profile_sleep_ms, 6000)
+        args.notice_blocked_sleep_seconds = max(args.notice_blocked_sleep_seconds, 300)
+        args.status_blocked_sleep_seconds = max(args.status_blocked_sleep_seconds, 300)
+        args.profile_blocked_sleep_seconds = max(args.profile_blocked_sleep_seconds, 300)
 
     try:
         from dotenv import load_dotenv
