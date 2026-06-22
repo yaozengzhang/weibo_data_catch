@@ -19,6 +19,13 @@ NOTICE_BASE_URL = "https://service.account.weibo.com/index"
 SERVICE_BASE_URL = "https://service.account.weibo.com"
 
 
+class NoticeRateLimitError(RuntimeError):
+    def __init__(self, page_number: int, detail_url: str, message: str = "notice_detail_rate_limited"):
+        super().__init__(message)
+        self.page_number = page_number
+        self.detail_url = detail_url
+
+
 def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
@@ -84,6 +91,20 @@ def parse_date_arg(value: str | None) -> date | None:
     if not parsed:
         raise ValueError(f"无法解析日期: {value}")
     return parsed
+
+
+def is_rate_limited_html(html: str, page_url: str = "") -> bool:
+    decoded_html = html_lib.unescape(html or "")
+    if "standerror" in page_url and "ip_limit" in page_url:
+        return True
+    return any(
+        marker in decoded_html
+        for marker in (
+            "你的访问超过今日上限",
+            "访问超过今日上限",
+            "source=ip_limit_view",
+        )
+    )
 
 
 def extract_raw_text(container: Tag, fallback_text: str) -> str:
@@ -355,6 +376,23 @@ class NoticeCrawler:
                 self._scroll_to_bottom(page)
 
                 html = page.content()
+                if is_rate_limited_html(html, page.url):
+                    page_stats = {
+                        "source_page": target_url,
+                        "list_count": 0,
+                        "detail_count": 0,
+                        "kept_count": 0,
+                        "skipped_newer": 0,
+                        "skipped_older": 0,
+                        "skipped_no_original": 0,
+                        "skipped_unknown_date": 0,
+                        "blocked": True,
+                        "blocked_reason": "notice_list_rate_limited",
+                        "stop_after_page": True,
+                    }
+                    if on_page_records:
+                        on_page_records(page_number, [], page_stats)
+                    raise NoticeRateLimitError(page_number, target_url, "notice_list_rate_limited")
                 if self.keep_html and self.html_dir:
                     html_path = self.html_dir / f"notice_status{status}_page{page_number}.html"
                     html_path.write_text(html, encoding="utf-8")
@@ -371,6 +409,8 @@ class NoticeCrawler:
                     "skipped_older": 0,
                     "skipped_no_original": 0,
                     "skipped_unknown_date": 0,
+                    "blocked": False,
+                    "blocked_reason": "",
                     "stop_after_page": False,
                 }
                 detail_records: list[dict[str, Any]] = []
@@ -412,6 +452,14 @@ class NoticeCrawler:
                         rid = record.get("rid") or str(index)
                         detail_path = self.html_dir / f"detail_{rid}.html"
                         detail_path.write_text(detail_html, encoding="utf-8")
+                    if is_rate_limited_html(detail_html, page.url):
+                        page_stats["blocked"] = True
+                        page_stats["blocked_reason"] = "notice_detail_rate_limited"
+                        page_stats["stop_after_page"] = True
+                        if on_page_records:
+                            on_page_records(page_number, page_records, page_stats)
+                        print(f"  检测到社区管理中心详情页访问上限，停止在第 {page_number} 页。")
+                        raise NoticeRateLimitError(page_number, str(detail_url))
                     parsed_record = parse_detail_html(detail_html, base_record=record, detail_url=str(detail_url))
                     if require_original_link and not (
                         parsed_record.get("reported_weibo_url") and parsed_record.get("tweet_id")

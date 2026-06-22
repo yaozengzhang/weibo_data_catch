@@ -122,7 +122,7 @@ def main() -> None:
         from dotenv import load_dotenv
 
         from crawler.build_dataset import DATASET_COLUMNS, NOTICE_COLUMNS, build_dataset, write_tsv
-        from crawler.notice_crawler import NoticeCrawler, parse_date_arg
+        from crawler.notice_crawler import NoticeCrawler, NoticeRateLimitError, parse_date_arg
         from crawler.profile_crawler import PROFILE_COLUMNS, PROFILE_FAILURE_COLUMNS, ProfileCrawler
         from crawler.run_state import load_rows, merge_rows, read_json, row_key, write_json, write_rows
         from crawler.status_crawler import STATUS_COLUMNS, StatusCrawler
@@ -188,9 +188,12 @@ def main() -> None:
                 "skipped_older",
                 "skipped_no_original",
                 "skipped_unknown_date",
+                "blocked",
+                "blocked_reason",
                 "stop_after_page",
             ],
         )
+        blocked = str(page_stats.get("blocked", "")).lower() == "true"
         write_json(
             paths["state"],
             {
@@ -198,23 +201,45 @@ def main() -> None:
                 "date_from": args.date_from,
                 "date_to": args.date_to,
                 "last_page": page_number,
-                "next_page": page_number + 1,
+                "next_page": page_number if blocked else page_number + 1,
                 "notice_rows": len(existing_notices),
+                "blocked": blocked,
+                "blocked_reason": page_stats.get("blocked_reason", ""),
             },
         )
 
-    notices = crawler.crawl(
-        start_page=start_page,
-        end_page=args.end_page,
-        status=args.status,
-        notice_type=args.notice_type,
-        login=args.login,
-        require_original_link=args.require_original_link,
-        date_from=date_from,
-        date_to=date_to,
-        stop_before_date=args.stop_before_date,
-        on_page_records=on_page_records,
-    )
+    try:
+        notices = crawler.crawl(
+            start_page=start_page,
+            end_page=args.end_page,
+            status=args.status,
+            notice_type=args.notice_type,
+            login=args.login,
+            require_original_link=args.require_original_link,
+            date_from=date_from,
+            date_to=date_to,
+            stop_before_date=args.stop_before_date,
+            on_page_records=on_page_records,
+        )
+    except NoticeRateLimitError as exc:
+        notices = []
+        write_json(
+            paths["state"],
+            {
+                "stage": "blocked",
+                "date_from": args.date_from,
+                "date_to": args.date_to,
+                "last_page": exc.page_number,
+                "next_page": exc.page_number,
+                "notice_rows": len(existing_notices),
+                "blocked": True,
+                "blocked_reason": str(exc),
+                "blocked_detail_url": exc.detail_url,
+            },
+        )
+        write_rows(paths["raw"], existing_notices, NOTICE_COLUMNS)
+        print(f"检测到社区管理中心访问上限，已停止；下次从第 {exc.page_number} 页继续。")
+        return
     notices = merge_rows(existing_notices, notices)
 
     status_fields = None

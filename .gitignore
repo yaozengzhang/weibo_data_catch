@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 
 data/
-weibo_rumor_2022_2025/
-weibo_rumor_2022_2025_smoke/
+weibo_rumor_2022_2025*/
 
 *.log
